@@ -19,11 +19,11 @@
 
 package org.ossreviewtoolkit.plugins.packagemanagers.node.yarn
 
+import com.mayakapps.kache.FileKache
+
 import java.io.File
 import java.lang.invoke.MethodHandles
 import java.util.concurrent.ConcurrentHashMap
-
-import kotlin.time.Duration.Companion.days
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -54,7 +54,6 @@ import org.ossreviewtoolkit.plugins.packagemanagers.node.parsePackageJson
 import org.ossreviewtoolkit.plugins.packagemanagers.node.splitNamespaceAndName
 import org.ossreviewtoolkit.utils.common.CommandLineTool
 import org.ossreviewtoolkit.utils.common.DirectoryStash
-import org.ossreviewtoolkit.utils.common.DiskCache
 import org.ossreviewtoolkit.utils.common.Os
 import org.ossreviewtoolkit.utils.common.alsoIfNull
 import org.ossreviewtoolkit.utils.common.collectMessages
@@ -64,15 +63,19 @@ import org.ossreviewtoolkit.utils.common.mebibytes
 import org.ossreviewtoolkit.utils.common.realFile
 import org.ossreviewtoolkit.utils.common.textValueOrEmpty
 import org.ossreviewtoolkit.utils.ort.ortDataDirectory
+import org.ossreviewtoolkit.utils.ort.runBlocking
 
 import org.semver4j.RangesList
 import org.semver4j.RangesListFactory
 
-private val yarnInfoCache = DiskCache(
-    directory = ortDataDirectory.resolve("cache/analyzer/yarn/info"),
-    maxCacheSizeInBytes = 100.mebibytes,
-    maxCacheEntryAgeInSeconds = 7.days.inWholeSeconds
-)
+private val yarnInfoCache = runBlocking {
+    FileKache(
+        directory = ortDataDirectory.resolve("cache/analyzer/yarn/info").path,
+        maxSize = 100.mebibytes
+    ) {
+        // maxCacheEntryAgeInSeconds = 7.days.inWholeSeconds
+    }
+}
 
 /** Name of the scope with the regular dependencies. */
 private const val DEPENDENCIES_SCOPE = "dependencies"
@@ -355,12 +358,21 @@ open class Yarn(override val descriptor: PluginDescriptor = YarnFactory.descript
     }
 
     internal fun getRemotePackageDetails(packageName: String): PackageJson? {
-        yarnInfoCache.read(packageName)?.also { return parsePackageJson(it) }
+        runBlocking {
+            yarnInfoCache.get(packageName)
+        }?.also {
+            return parsePackageJson(it)
+        }
 
         val process = YarnCommand.run("info", "--json", packageName).requireSuccess()
 
         return parseYarnInfo(process.stdout, process.stderr)?.also {
-            yarnInfoCache.write(packageName, Json.encodeToString(it))
+            runBlocking {
+                yarnInfoCache.put(packageName) { path ->
+                    File(path).writeText(Json.encodeToString(it))
+                    true
+                }
+            }
         }
     }
 }

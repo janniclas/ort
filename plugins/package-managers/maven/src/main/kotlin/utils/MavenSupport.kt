@@ -19,11 +19,11 @@
 
 package org.ossreviewtoolkit.plugins.packagemanagers.maven.utils
 
+import com.mayakapps.kache.FileKache
+
 import java.io.Closeable
 import java.io.File
 import java.net.URI
-
-import kotlin.time.Duration.Companion.hours
 
 import org.apache.logging.log4j.kotlin.logger
 import org.apache.maven.artifact.repository.LegacyLocalRepositoryManager
@@ -79,7 +79,6 @@ import org.ossreviewtoolkit.model.PackageProvider
 import org.ossreviewtoolkit.model.RemoteArtifact
 import org.ossreviewtoolkit.model.fromYaml
 import org.ossreviewtoolkit.model.toYaml
-import org.ossreviewtoolkit.utils.common.DiskCache
 import org.ossreviewtoolkit.utils.common.collectMessages
 import org.ossreviewtoolkit.utils.common.gibibytes
 import org.ossreviewtoolkit.utils.common.searchUpwardsForSubdirectory
@@ -88,6 +87,7 @@ import org.ossreviewtoolkit.utils.ort.OrtProxySelector
 import org.ossreviewtoolkit.utils.ort.downloadText
 import org.ossreviewtoolkit.utils.ort.okHttpClient
 import org.ossreviewtoolkit.utils.ort.ortDataDirectory
+import org.ossreviewtoolkit.utils.ort.runBlocking
 import org.ossreviewtoolkit.utils.ort.showStackTrace
 
 /**
@@ -100,11 +100,14 @@ class MavenSupport(private val workspaceReader: WorkspaceReader) : Closeable {
     private val container = createContainer()
     private val repositorySystemSession = createRepositorySystemSession(workspaceReader)
 
-    private val remoteArtifactCache = DiskCache(
-        directory = ortDataDirectory.resolve("cache/analyzer/${workspaceReader.repository.contentType}"),
-        maxCacheSizeInBytes = 1.gibibytes,
-        maxCacheEntryAgeInSeconds = 6.hours.inWholeSeconds
-    )
+    private val remoteArtifactCache = runBlocking {
+        FileKache(
+            directory = ortDataDirectory.resolve("cache/analyzer/${workspaceReader.repository.contentType}").path,
+            maxSize = 1.gibibytes
+        ) {
+            // maxCacheEntryAgeInSeconds = 6.hours.inWholeSeconds
+        }
+    }
 
     // The MavenSettingsBuilder class is deprecated, but internally it uses its successor SettingsBuilder. Calling
     // MavenSettingsBuilder requires less code than calling SettingsBuilder, so use it until it is removed.
@@ -289,7 +292,9 @@ class MavenSupport(private val workspaceReader: WorkspaceReader) : Closeable {
 
         val cacheKey = "$artifact@$allRepositories"
 
-        remoteArtifactCache.read(cacheKey)?.let {
+        runBlocking {
+            remoteArtifactCache.get(cacheKey)
+        }?.let {
             logger.debug { "Reading remote artifact for '$artifact' from disk cache." }
             return it.fromYaml()
         }
@@ -407,7 +412,12 @@ class MavenSupport(private val workspaceReader: WorkspaceReader) : Closeable {
 
                 return RemoteArtifact(info.downloadUrl, hash).also { remoteArtifact ->
                     logger.debug { "Writing remote artifact for '$artifact' to disk cache." }
-                    remoteArtifactCache.write(cacheKey, remoteArtifact.toYaml())
+                    runBlocking {
+                        remoteArtifactCache.put(cacheKey) { path ->
+                            File(path).writeText(remoteArtifact.toYaml())
+                            true
+                        }
+                    }
                 }
             } else {
                 logger.debug { artifactDownload.exception.collectMessages() }
@@ -424,7 +434,12 @@ class MavenSupport(private val workspaceReader: WorkspaceReader) : Closeable {
             if (downloadUrls.any { url -> PACKAGING_TYPES.any { url.endsWith(".$it") } }) {
                 logger.debug { "Writing empty remote artifact for '$artifact' to disk cache." }
 
-                remoteArtifactCache.write(cacheKey, remoteArtifact.toYaml())
+                runBlocking {
+                    remoteArtifactCache.put(cacheKey) { path ->
+                        File(path).writeText(remoteArtifact.toYaml())
+                        true
+                    }
+                }
             } else {
                 logger.warn { "Could not find artifact $artifact in any of $downloadUrls." }
             }
@@ -600,7 +615,7 @@ class MavenSupport(private val workspaceReader: WorkspaceReader) : Closeable {
     }
 
     override fun close() {
-        remoteArtifactCache.close()
+        runBlocking { remoteArtifactCache.close() }
     }
 }
 

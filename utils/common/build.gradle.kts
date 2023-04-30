@@ -27,7 +27,6 @@ dependencies {
     api(libs.jackson.databind)
     api(libs.semver4j)
 
-    implementation(libs.diskLruCache)
     implementation(libs.log4j.api)
     implementation(libs.springCore)
 
