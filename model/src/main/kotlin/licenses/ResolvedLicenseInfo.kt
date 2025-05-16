@@ -83,7 +83,7 @@ data class ResolvedLicenseInfo(
      * in any of the configured [LicenseFilePatterns] matched against the root path of the package (or project).
      */
     fun mainLicense(): SpdxExpression? {
-        val matcher = PathLicenseMatcher(LicenseFilePatterns.getInstance())
+        val licenseMatcher = PathLicenseMatcher(LicenseFilePatterns.getInstance())
         val licensePaths = flatMap { resolvedLicense ->
             resolvedLicense.locations.map { it.location.path }
         }
@@ -92,7 +92,7 @@ data class ResolvedLicenseInfo(
             resolvedLicense.locations.any {
                 val rootPath = (it.provenance as? RepositoryProvenance)?.vcsInfo?.path.orEmpty()
 
-                val applicableLicensePaths = matcher.getApplicableLicenseFilesForDirectories(
+                val applicableLicensePaths = licenseMatcher.getApplicableLicenseFilesForDirectories(
                     licensePaths,
                     listOf(rootPath)
                 )
